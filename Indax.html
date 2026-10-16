@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Battle Royale Mobile</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101820;color:white;font-family:Arial,sans-serif;overflow:hidden;touch-action:none}
+canvas{display:block;width:100vw;height:100dvh;background:#759b55}
+button{border:1px solid #ffffff55;background:#17212ddd;color:white;padding:12px 16px;border-radius:10px;font-weight:bold}
+button:active{background:#e94c36}
+#hud{position:absolute;top:10px;left:10px;right:10px;display:flex;justify-content:space-between;gap:8px;pointer-events:none}
+.box{background:#101820d9;padding:9px 12px;border-radius:9px;font-size:13px}
+#healthOuter{width:125px;height:10px;background:#555;border-radius:8px;margin-top:5px;overflow:hidden}
+#health{height:100%;width:100%;background:#35dc67}
+#menu,#endScreen{position:absolute;inset:0;background:linear-gradient(#07111bdc,#101820f5);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px}
+h1{font-size:clamp(30px,8vw,55px);margin:0 0 10px;color:#ffcc45;text-shadow:2px 3px #812a20}
+.subtitle{color:#c6d6e1;max-width:350px;line-height:1.6}
+#play{font-size:20px;background:#e94c36;margin-top:18px;padding:16px 40px}
+#controls{position:absolute;inset:0;pointer-events:none;display:none}
+#stick{position:absolute;left:24px;bottom:35px;width:125px;height:125px;border-radius:50%;background:#ffffff20;border:2px solid #ffffff60;pointer-events:auto}
+#knob{position:absolute;width:48px;height:48px;left:36px;top:36px;border-radius:50%;background:#ffffffa8}
+.action{position:absolute;right:20px;border-radius:50%;width:66px;height:66px;padding:0;pointer-events:auto;background:#18212dcc}
+#fire{bottom:45px;width:82px;height:82px;background:#db3d32}
+#reload{bottom:140px}
+#jump{bottom:215px}
+#heal{right:100px;bottom:140px}
+#hint{position:absolute;bottom:8px;left:0;right:0;text-align:center;font-size:11px;color:#fff9;pointer-events:none}
+#endScreen{display:none}
+#mapLabel{position:absolute;top:70px;right:12px;background:#101820c9;border-radius:7px;padding:7px;font-size:12px}
+@media(min-width:800px){#stick{left:45px}#fire{right:40px}}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud" style="display:none">
+  <div class="box">
+    <b>❤️ HEALTH</b>
+    <div id="healthOuter"><div id="health"></div></div>
+    <span id="healthText">100</span>
+  </div>
+  <div class="box" id="stats">🤖 Enemies: 8<br>🏆 Kills: 0</div>
+  <div class="box" id="ammoBox">🔫 Ammo: 30 / 120</div>
+</div>
+
+<div id="mapLabel" style="display:none">🌍 GREEN ISLAND</div>
+
+<div id="menu">
+  <h1>BATTLE<br>ROYALE</h1>
+  <div style="font-size:18px;color:#fff">MOBILE SURVIVAL</div>
+  <p class="subtitle">Explore the island, defeat enemy bots, collect survival rewards and become the last survivor!</p>
+  <p>🎮 Offline • 🤖 Bots • 🔫 Shooting</p>
+  <button id="play">▶ PLAY GAME</button>
+  <p style="font-size:12px;color:#aaa">Prototype V1.0</p>
+</div>
+
+<div id="controls">
+  <div id="stick"><div id="knob"></div></div>
+  <button class="action" id="fire">🔫<br>FIRE</button>
+  <button class="action" id="reload">↻<br>RELOAD</button>
+  <button class="action" id="jump">⬆<br>JUMP</button>
+  <button class="action" id="heal">❤️<br>HEAL</button>
+  <div id="hint">Move: joystick • Aim: tap enemy/map • Fire: FIRE button</div>
+</div>
+
+<div id="endScreen">
+  <h1 id="endTitle">GAME OVER</h1>
+  <p id="endText"></p>
+  <button id="again">🔄 PLAY AGAIN</button>
+</div>
+
+<script>
+(()=>{
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+const $=id=>document.getElementById(id);
+let W=innerWidth,H=innerHeight,dpr=1;
+function resize(){
+ dpr=Math.min(devicePixelRatio||1,2);
+ W=innerWidth;H=innerHeight;
+ canvas.width=W*dpr;canvas.height=H*dpr;
+ canvas.style.width=W+'px';canvas.style.height=H+'px';
+ ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener('resize',resize);resize();
+
+const WORLD={w:2200,h:1800};
+let player,bots,bullets,loot,obstacles,particles;
+let running=false,keys={},kills=0,ammo=30,reserve=120,reloading=false;
+let last=0,spawnTimer=0,fireHeld=false,joystick={x:0,y:0};
+let camera={x:0,y:0},aim={x:0,y:0};
+let zone,elapsed=0,matchEnded=false;
+
+function rand(a,b){return a+Math.random()*(b-a)}
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+function makeGame(){
+ player={x:WORLD.w/2,y:WORLD.h/2,r:15,hp:100,speed:205,angle:0,inv:0};
+ bots=[];bullets=[];loot=[];obstacles=[];particles=[];
+ kills=0;ammo=30;reserve=120;reloading=false;
+ elapsed=0;spawnTimer=0;matchEnded=false;
+ zone={x:WORLD.w/2,y:WORLD.h/2,r:820};
+ for(let i=0;i<45;i++){
+  let x=rand(90,WORLD.w-90),y=rand(90,WORLD.h-90);
+  if(Math.hypot(x-player.x,y-player.y)<170){i--;continue}
+  obstacles.push({x,y,w:rand(45,100),h:rand(40,90),type:Math.random()<.55?'tree':'house'});
+ }
+ for(let i=0;i<8;i++)spawnBot();
+ for(let i=0;i<12;i++)spawnLoot();
+}
+function spawnBot(){
+ let a=rand(0,Math.PI*2),r=rand(340,720);
+ bots.push({x:clamp(player.x+Math.cos(a)*r,40,WORLD.w-40),
+ y:clamp(player.y+Math.sin(a)*r,40,WORLD.h-40),
+ r:14,hp:100,speed:rand(55,90),angle:0,cool:rand(.4,1.5),wander:rand(0,6)});
+}
+function spawnLoot(){
+ loot.push({x:rand(60,WORLD.w-60),y:rand(60,WORLD.h-60),type:Math.random()<.6?'ammo':'med',r:11});
+}
+function start(){
+ makeGame();running=true;
+ $('menu').style.display='none';$('endScreen').style.display='none';
+ $('hud').style.display='flex';$('controls').style.display='block';$('mapLabel').style.display='block';
+ last=performance.now();requestAnimationFrame(loop);
+}
+function finish(win){
+ if(matchEnded)return;
+ matchEnded=true;running=false;
+ $('endTitle').textContent=win?'🏆 VICTORY!':'💀 GAME OVER';
+ $('endText').textContent=win?
+ 'You are the last survivor! Kills: '+kills:
+ 'You were eliminated. Kills: '+kills;
+ $('endScreen').style.display='flex';
+}
+function shoot(){
+ if(!running||matchEnded||reloading)return;
+ if(ammo<=0){reload();return}
+ ammo--;
+ const a=player.angle;
+ bullets.push({x:player.x+Math.cos(a)*20,y:player.y+Math.sin(a)*20,
+ vx:Math.cos(a)*620,vy:Math.sin(a)*620,life:1.1,owner:'p',damage:35});
+ updateHUD();
+}
+function reload(){
+ if(reloading||ammo===30||reserve<=0)return;
+ reloading=true;
+ setTimeout(()=>{
+  if(!running){reloading=false;return}
+  let n=Math.min(30-ammo,reserve);
+  ammo+=n;reserve-=n;reloading=false;updateHUD();
+ },1100);
+}
+function heal(){
+ if(player&&player.hp<100){
+  player.hp=Math.min(100,player.hp+35);updateHUD();
+ }
+}
+function updateHUD(){
+ $('health').style.width=player.hp+'%';
+ $('healthText').textContent=Math.ceil(player.hp);
+ $('stats').innerHTML='🤖 Enemies: '+bots.length+'<br>🏆 Kills: '+kills;
+ $('ammoBox').textContent='🔫 Ammo: '+ammo+' / '+reserve+(reloading?' (Reloading)':'');
+}
+function update(dt){
+ elapsed+=dt;
+ player.inv=Math.max(0,player.inv-dt);
+ // Camera follows player
+ camera.x=clamp(player.x-W/2,0,WORLD.w-W);
+ camera.y=clamp(player.y-H/2,0,WORLD.h-H);
+ // Move player
+ let mx=joystick.x,my=joystick.y;
+ if(keys['w']||keys['arrowup'])my--;
+ if(keys['s']||keys['arrowdown'])my++;
+ if(keys['a']||keys['arrowleft'])mx--;
+ if(keys['d']||keys['arrowright'])mx++;
+ let mag=Math.hypot(mx,my);
+ if(mag>1){mx/=mag;my/=mag}
+ player.x=clamp(player.x+mx*player.speed*dt,20,WORLD.w-20);
+ player.y=clamp(player.y+my*player.speed*dt,20,WORLD.h-20);
+ // Collision with houses/trees
+ for(const o of obstacles){
+  let cx=clamp(player.x,o.x-o.w/2,o.x+o.w/2);
+  let cy=clamp(player.y,o.y-o.h/2,o.y+o.h/2);
+  let dx=player.x-cx,dy=player.y-cy,d=Math.hypot(dx,dy);
+  if(d<player.r&&d>0){player.x+=dx/d*(player.r-d);player.y+=dy/d*(player.r-d)}
+ }
+ // Find nearest enemy if player has not aimed manually
+ if(!aim.manual&&bots.length){
+  let b=bots.reduce((p,c)=>dist(player,c)<dist(player,p)?c:p);
+  player.angle=Math.atan2(b.y-player.y,b.x-player.x);
+ }
+ if(aim.manual)player.angle=Math.atan2(aim.y-player.y,aim.x-player.x);
+ if(fireHeld)spawnTimer-=dt;
+ if(fireHeld&&spawnTimer<=0){shoot();spawnTimer=.19}
+ // Enemy AI
+ for(const b of bots){
+  let d=dist(player,b);
+  b.angle=Math.atan2(player.y-b.y,player.x-b.x);
+  if(d>145){
+   b.x+=Math.cos(b.angle)*b.speed*dt;
+   b.y+=Math.sin(b.angle)*b.speed*dt;
+  }else{
+   b.cool-=dt;
+   if(b.cool<=0){
+    bullets.push({x:b.x+Math.cos(b.angle)*16,y:b.y+Math.sin(b.angle)*16,
+     vx:Math.cos(b.angle)*300,vy:Math.sin(b.angle)*300,life:1.8,owner:'e',damage:7});
+    b.cool=rand(.8,1.5);
+   }
+  }
+  b.x=clamp(b.x,20,WORLD.w-20);b.y=clamp(b.y,20,WORLD.h-20);
+ }
+ // Bullet physics
+ for(let i=bullets.length-1;i>=0;i--){
+  const q=bullets[i];q.x+=q.vx*dt;q.y+=q.vy*dt;q.life-=dt;
+  let hit=false;
+  if(q.owner==='p'){
+   for(let j=bots.length-1;j>=0;j--){
+    const b=bots[j];
+    if(Math.hypot(q.x-b.x,q.y-b.y)<b.r+4){
+     b.hp-=q.damage;hit=true;
+     if(b.hp<=0){
+      loot.push({x:b.x,y:b.y,type:Math.random()<.5?'ammo':'med',r:11});
+      bots.splice(j,1);kills++;
+      if(bots.length===0){finish(true);return}
+     }
+     break;
+    }
+   }
+  }else if(Math.hypot(q.x-player.x,q.y-player.y)<player.r+4){
+   player.hp-=q.damage;hit=true;
+   if(player.hp<=0){player.hp=0;updateHUD();finish(false);return}
+  }
+  if(hit||q.life<=0||q.x<0||q.y<0||q.x>WORLD.w||q.y>WORLD.h)bullets.splice(i,1);
+ }
+ // Safe zone shrinks
+ zone.r=Math.max(170,820-elapsed*2.0);
+ if(dist(player,zone)>zone.r){
+  player.hp-=5*dt;
+  if(player.hp<=0){player.hp=0;updateHUD();finish(false);return}
+ }
+ // Loot pickup
+ for(let i=loot.length-1;i>=0;i--){
+  const l=loot[i];
+  if(dist(player,l)<28){
+   if(l.type==='ammo')reserve=Math.min(240,reserve+30);
+   else player.hp=Math.min(100,player.hp+25);
+   loot.splice(i,1);updateHUD();
+  }
+ }
+ updateHUD();
+}
+function draw(){
+ ctx.clearRect(0,0,W,H);
+ ctx.save();ctx.translate(-camera.x,-camera.y);
+ // Grass
+ ctx.fillStyle='#789d53';ctx.fillRect(0,0,WORLD.w,WORLD.h);
+ // Ground details
+ for(let x=0;x<WORLD.w;x+=100)for(let y=0;y<WORLD.h;y+=100){
+  ctx.fillStyle=((x+y)/100)%2?'#71964c':'#7fa458';
+  ctx.fillRect(x,y,100,100);
+ }
+ // Roads
+ ctx.fillStyle='#aaa58a';
+ ctx.fillRect(0,500,WORLD.w,95);ctx.fillRect(750,0,100, WORLD.h);
+ ctx.strokeStyle='#eee2ad';ctx.lineWidth=3;ctx.setLineDash([20,20]);
+ ctx.beginPath();ctx.moveTo(0,548);ctx.lineTo(WORLD.w,548);
+ ctx.moveTo(800,0);ctx.lineTo(800,WORLD.h);ctx.stroke();ctx.setLineDash([]);
+ // Safe zone
+ ctx.strokeStyle='#6eeaff';ctx.lineWidth=5;ctx.beginPath();
+ ctx.arc(zone.x,zone.y,zone.r,0,Math.PI*2);ctx.stroke();
+ // Obstacles
+ for(const o of obstacles){
+  if(o.type==='tree'){
+   ctx.fillStyle='#63492e';ctx.fillRect(o.x-5,o.y,10,18);
+   ctx.fillStyle='#245b35';ctx.beginPath();ctx.arc(o.x,o.y,o.w*.45,0,7);ctx.fill();
+   ctx.fillStyle='#397643';ctx.beginPath();ctx.arc(o.x-7,o.y-5,o.w*.27,0,7);ctx.fill();
+  }else{
+   ctx.fillStyle='#8d7963';ctx.fillRect(o.x-o.w/2,o.y-o.h/2,o.w,o.h);
+   ctx.fillStyle='#c2aa7b';ctx.fillRect(o.x-o.w/2+5,o.y-o.h/2+5,o.w-10,o.h-10);
+   ctx.fillStyle='#594635';ctx.fillRect(o.x-7,o.y-7,14,18);
+  }
+ }
+ // Loot
+ for(const l of loot){
+  ctx.fillStyle=l.type==='ammo'?'#f6d547':'#f15d68';
+  ctx.fillRect(l.x-9,l.y-9,18,18);
+  ctx.fillStyle='#17212d';ctx.font='12px Arial';ctx.textAlign='center';
+  ctx.fillText(l.type==='ammo'?'A':'+',l.x,l.y+4);
+ }
+ // Bullets
+ for(const q of bullets){
+  ctx.fillStyle=q.owner==='p'?'#fff08a':'#ff5148';
+  ctx.beginPath();ctx.arc(q.x,q.y,4,0,7);ctx.fill();
+ }
+ // Bots
+ for(const b of bots){
+  ctx.fillStyle='#7d1d24';ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,7);ctx.fill();
+  ctx.fillStyle='#f5c7a6';ctx.beginPath();ctx.arc(b.x,b.y-3,7,0,7);ctx.fill();
+  ctx.strokeStyle='#251a18';ctx.lineWidth=5;ctx.beginPath();
+  ctx.moveTo(b.x,b.y);ctx.lineTo(b.x+Math.cos(b.angle)*23,b.y+Math.sin(b.angle)*23);ctx.stroke();
+  ctx.fillStyle='#333';ctx.fillRect(b.x-15,b.y-24,30,4);
+  ctx.fillStyle='#ff4343';ctx.fillRect(b.x-15,b.y-24,30*Math.max(0,b.hp/100),4);
+ }
+ // Player
+ ctx.fillStyle=player.inv>0?'#fff':'#1676e8';
+ ctx.beginPath();ctx.arc(player.x,player.y,player.r,0,7);ctx.fill();
+ ctx.fillStyle='#ffd0a6';ctx.beginPath();ctx.arc(player.x,player.y-4,8,0,7);ctx.fill();
+ ctx.strokeStyle='#17212d';ctx.lineWidth=7;ctx.beginPath();
+ ctx.moveTo(player.x,player.y);ctx.lineTo(player.x+Math.cos(player.angle)*30,player.y+Math.sin(player.angle)*30);ctx.stroke();
+ // World border
+ ctx.strokeStyle='#e3e8b6';ctx.lineWidth=8;ctx.strokeRect(0,0,WORLD.w,WORLD.h);
+ ctx.restore();
+}
+function loop(t){
+ if(!running)return;
+ const dt=Math.min((t-last)/1000,.04);last=t;
+ update(dt);draw();
+ if(running)requestAnimationFrame(loop);
+}
+// Keyboard controls
+addEventListener('keydown',e=>{
+ keys[e.key.toLowerCase()]=true;
+ if(e.key===' '){e.preventDefault();shoot()}
+ if(e.key.toLowerCase()==='r')reload();
+ if(e.key.toLowerCase()==='h')heal();
+});
+addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+
+// Joystick
+const stick=$('stick'),knob=$('knob');
+let stickId=null,stickRect;
+function moveStick(e){
+ const r=stick.getBoundingClientRect();
+ let dx=e.clientX-(r.left+r.width/2),dy=e.clientY-(r.top+r.height/2);
+ const max=38,len=Math.hypot(dx,dy);
+ if(len>max){dx=dx/len*max;dy=dy/len*max}
+ joystick.x=dx/max;joystick.y=dy/max;
+ knob.style.transform=`translate(${dx}px,${dy}px)`;
+}
+stick.addEventListener('pointerdown',e=>{
+ stickId=e.pointerId;stick.setPointerCapture(e.pointerId);moveStick(e);
+});
+stick.addEventListener('pointermove',e=>{if(e.pointerId===stickId)moveStick(e)});
+function resetStick(){stickId=null;joystick.x=joystick.y=0;knob.style.transform='translate(0,0)'}
+stick.addEventListener('pointerup',resetStick);
+stick.addEventListener('pointercancel',resetStick);
+
+// Fire button
+const fire=$('fire');
+fire.addEventListener('pointerdown',e=>{e.preventDefault();fireHeld=true;aim.manual=false;spawnTimer=0});
+['pointerup','pointercancel','pointerleave'].forEach(ev=>fire.addEventListener(ev,()=>fireHeld=false));
+$('reload').addEventListener('pointerdown',e=>{e.preventDefault();reload()});
+$('heal').addEventListener('pointerdown',e=>{e.preventDefault();heal()});
+$('jump').addEventListener('pointerdown',e=>{
+ e.preventDefault();
+ // Short speed boost as a simple jump-like dodge
+ player.x=clamp(player.x+Math.cos(player.angle)*35,20,WORLD.w-20);
+ player.y=clamp(player.y+Math.sin(player.angle)*35,20,WORLD.h-20);
+});
+// Tap canvas to aim
+canvas.addEventListener('pointerdown',e=>{
+ if(!running)return;
+ const rect=canvas.getBoundingClientRect();
+ aim.x=e.clientX-rect.left+camera.x;
+ aim.y=e.clientY-rect.top+camera.y;
+ aim.manual=true;
+});
+$('play').addEventListener('click',start);
+$('again').addEventListener('click',start);
+makeGame();draw();
+})();
+</script>
+</body>
+</html>
